@@ -9,27 +9,27 @@ This repository accompanies our conference paper. It provides tools for computin
 ```
 .
 ├── models/
-│   ├── afno.py                  # AFNO backbone architecture
-│   └── losses.py                # Loss functions and field denormalizer
+│   ├── afno.py                      # AFNO backbone architecture
+│   └── losses.py                    # Loss functions and field denormalizer
 ├── training/
-│   ├── train.py                 # Entry point of training and evaluation
-│   └── trainer.py               # Training loops, LR finder, early stopping
+│   ├── train.py                     # Entry point of training and evaluation
+│   └── trainer.py                   # Training loops, LR finder, early stopping
 ├── evaluation/
-│   ├── metrics.py               # Accuracy metrics
-│   └── visualize.py             # Prediction and Hovmöller visualizations
+│   ├── metrics.py                   # Accuracy metrics
+│   └── visualize.py                 # Prediction and Hovmöller visualizations
 ├── data/
-│   └── prepare_dataset.py       # Dataset preparation pipeline
+│   └── prepare_dataset.py           # Dataset preparation pipeline
 ├── utils/
-│   ├── lwa.py                   # LWA / FAWA computation
-│   ├── compute_lwa.py           # Script to batch-compute LWA from model output
-│   ├── blocking_detection.py    # Blocking event detection and classification
-│   ├── run_blocking_detection.py# Script to run blocking detection
-│   ├── blocking_utils.py        # Supporting utilities for blocking analysis
-│   └── data_io.py               # NetCDF I/O helpers
+│   ├── lwa.py                       # LWA / FAWA computation
+│   ├── compute_lwa.py               # Script to batch-compute LWA from model output
+│   ├── blocking_detection.py        # Blocking event detection and classification
+│   ├── run_blocking_detection.py    # Script to run blocking detection
+│   ├── blocking_utils.py            # Supporting utilities for blocking analysis
+│   └── data_io.py                   # NetCDF I/O helpers
 └── visualization/
-    ├── plot_qgpv.py             # QGPV field snapshots
-    ├── plot_blocking.py         # Blocking event trajectory plots
-    └── plot_diagnostics.py      # Histograms and pixel-wise diagnostics
+    ├── plot_qgpv.py                 # QGPV field snapshots
+    ├── plot_blocking.py             # Blocking event trajectory plots
+    └── plot_diagnostics.py          # Histograms and pixel-wise diagnostics
 ```
 
 ---
