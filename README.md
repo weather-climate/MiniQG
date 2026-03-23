@@ -1,6 +1,6 @@
 # MiniQG
 
-This repository accompanies our conference paper. It provides tools for computing **Local Wave Activity (LWA)** from two-layer quasi-geostrophic potential vorticity (QGPV) fields, detecting and classifying **atmospheric blocking events**, and training/evaluating an **Adaptive Fourier Neural Operator (AFNO)** model for QGPV field prediction.
+This repository accompanies our conference paper. It provides tools for computing Local Wave Activity (LWA) from two-layer quasi-geostrophic potential vorticity (QGPV) fields, detecting and classifying atmospheric blocking events, and training/evaluating an Adaptive Fourier Neural Operator (AFNO) model for QGPV field prediction.
 
 ---
 
