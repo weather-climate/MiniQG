@@ -138,4 +138,6 @@ Blocking trajectories and QGPV snapshots can be plotted using the scripts in `vi
 
 The AFNO architecture is based on:
 
+> Guibas, J., Mardani, M., Li, Z., Tao, A., Anandkumar, A., & Catanzaro, B. (2021). Efficient Token Mixing for Transformers via Adaptive Fourier Neural Operators. In International Conference on Learning Representations. https://arxiv.org/abs/2111.13587
+
 > Pathak, J., Subramanian, S., Harrington, P., Raja, S., Chattopadhyay, A., Mardani, M., Kurth, T., Hall, D., Li, Z., Azizzadenesheli, K., Hassanzadeh, P., Kashinath, K., & Anandkumar, A. (2022). FourCastNet: A global data-driven high-resolution weather model using adaptive Fourier neural operators. *arXiv preprint* arXiv:2202.11214.
