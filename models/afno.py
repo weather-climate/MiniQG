@@ -2,6 +2,10 @@
 Adaptive Fourier Neural Operator (AFNO) backbone.
 
 Architecture reference:
+    Guibas, J., Mardani, M., Li, Z., Tao, A., Anandkumar, A., & Catanzaro, B. (2021).
+    Efficient Token Mixing for Transformers via Adaptive Fourier Neural Operators.
+    International Conference on Learning Representations
+    
     Pathak, J., Subramanian, S., Harrington, P., Raja, S., Chattopadhyay, A.,
     Mardani, M., Kurth, T., Hall, D., Li, Z., Azizzadenesheli, K.,
     Hassanzadeh, P., Kashinath, K., & Anandkumar, A. (2022).
