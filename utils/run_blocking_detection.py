@@ -8,9 +8,9 @@ input_file  = "path/to/LWA_input.nc"
 output_file = "path/to/blocking_output.nc"
 
 ds    = xr.open_dataset(input_file)
-lwa   = ds['LWA_pv'].values
-lwa_a = ds['LWA_pv_a'].values
-lwa_c = ds['LWA_pv_c'].values
+lwa   = ds['LWA'].sel(channel='q1').values
+lwa_a = ds['LWA_a'].sel(channel='q1').values
+lwa_c = ds['LWA_c'].sel(channel='q1').values
 time  = ds['time'].values
 lon   = ds['x'].values
 lat   = ds['y'].values
@@ -26,8 +26,8 @@ area = np.ones((nlat, nlon)) * dlon * dlat
 
 var_type           = 0
 thresh_option      = 0
-duration_threshold = 5
-size_factor        = 1
+duration_threshold = 20
+size_factor        = 1.5
 
 blocking_detection.blocking_detection(
     lwa, lwa_a, lwa_c, time, area, dlon, dlat, LR,

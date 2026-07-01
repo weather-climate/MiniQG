@@ -1,10 +1,10 @@
+import csv
 import os
 import numpy as np
 import xarray as xr
 from scipy.ndimage import uniform_filter
 
 
-# ── Pipeline switches ────────────────────────────────────────────────────────
 ENABLE_SPATIAL_CROP       = False
 ENABLE_SPATIAL_POOL       = False
 ENABLE_TEMPORAL_SUBSAMPLE = False
@@ -13,7 +13,6 @@ ENABLE_DETREND            = False
 ENABLE_NORMALIZATION      = False
 ENABLE_RANDOM_SUBSAMPLE   = False
 ENABLE_BLOCKING_REMOVAL   = False
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _spatial_crop(ds, config):
@@ -30,14 +29,14 @@ def _spatial_pool(ds, config):
 
 def _temporal_subsample(ds, config):
     stride = config.get('time_stride', 2)
-    times = ds['time'].values
-    keep = (times % stride) == (times[0] % stride)
+    times  = ds['time'].values
+    keep   = (times % stride) == (times[0] % stride)
     return ds.isel(time=keep)
 
 
 def _spectral_filter(ds, config):
     sigma = config.get('spectral_sigma', 1)
-    data = ds['q1q2'].values.copy()
+    data  = ds['q1q2'].values.copy()
     for t in range(data.shape[0]):
         for c in range(data.shape[1]):
             data[t, c] = uniform_filter(data[t, c], size=sigma)
@@ -46,18 +45,19 @@ def _spectral_filter(ds, config):
 
 def _detrend(ds, config):
     data = ds['q1q2'].values.copy()
-    T = data.shape[0]
-    t = np.arange(T)
+    T    = data.shape[0]
+    t    = np.arange(T)
     for c in range(data.shape[1]):
-        flat = data[:, c].reshape(T, -1)
+        flat   = data[:, c].reshape(T, -1)
         coeffs = np.polyfit(t, flat, deg=1)
-        trend = np.outer(coeffs[0], t).T.reshape(data[:, c].shape) + coeffs[1].reshape(1, *data.shape[2:])
+        trend  = (np.outer(coeffs[0], t).T.reshape(data[:, c].shape)
+                  + coeffs[1].reshape(1, *data.shape[2:]))
         data[:, c] -= trend
     return ds.assign({'q1q2': (ds['q1q2'].dims, data)})
 
 
 def _normalize(time_series, train_indices, config):
-    method = config.get('normalization_method', 'global')
+    method  = config.get('normalization_method', 'global')
     epsilon = 1e-8
     C, H, W = time_series.shape[1], time_series.shape[2], time_series.shape[3]
     train_data = time_series[train_indices]
@@ -98,27 +98,27 @@ def _remove_blocking_days(ds, blocking_days):
 
 
 def _random_subsample(ds, target_size, config, original_train_end, random_seed=None):
-    n = ds['q1q2'].shape[0]
+    n                = ds['q1q2'].shape[0]
     samples_to_remove = n - target_size
     if samples_to_remove <= 0:
         return ds.copy(), []
 
     num_blocks = config.get('num_random_blocks', 10)
-    available = np.arange(0, min(original_train_end, n))
+    available  = np.arange(0, min(original_train_end, n))
 
     if random_seed is not None:
         np.random.seed(random_seed)
 
-    base = samples_to_remove // num_blocks
-    rem  = samples_to_remove % num_blocks
+    base        = samples_to_remove // num_blocks
+    rem         = samples_to_remove % num_blocks
     block_sizes = [base + (1 if i < rem else 0) for i in range(num_blocks)]
 
     indices_to_remove, used_ranges = [], []
     for block_size in block_sizes:
         for _ in range(1000):
             max_start = len(available) - block_size
-            start = np.random.randint(0, max_start + 1)
-            end   = start + block_size
+            start     = np.random.randint(0, max_start + 1)
+            end       = start + block_size
             if all(end <= s or start >= e for s, e in used_ranges):
                 indices_to_remove.extend(available[start:end])
                 used_ranges.append((start, end))
@@ -127,19 +127,33 @@ def _random_subsample(ds, target_size, config, original_train_end, random_seed=N
             raise RuntimeError("Could not place all random blocks without overlap.")
 
     indices_to_remove = np.array(indices_to_remove)
-    keep = np.ones(n, dtype=bool)
+    keep              = np.ones(n, dtype=bool)
     keep[indices_to_remove] = False
     removed_times = ds['time'].values[indices_to_remove].tolist()
     return ds.isel(time=keep), removed_times
 
 
-def _compute_splits(time_coords, original_time_coords, original_train_end, original_valid_end):
-    t_train = original_time_coords[original_train_end - 1]
-    t_valid = original_time_coords[original_valid_end - 1]
+def _compute_splits(time_coords, original_time_coords, train_end_idx, valid_end_idx):
+    t_train = original_time_coords[train_end_idx - 1]
+    t_valid = original_time_coords[valid_end_idx - 1]
     train_idx = np.where((time_coords >= original_time_coords[0]) & (time_coords <= t_train))[0]
     valid_idx = np.where((time_coords > t_train) & (time_coords <= t_valid))[0]
     test_idx  = np.where(time_coords > t_valid)[0]
     return train_idx, valid_idx, test_idx
+
+
+def load_lwa_thresholds(csv_path, train_end_time):
+    lwa_data = {}
+    with open(csv_path, 'r') as f:
+        reader = csv.reader(f)
+        next(reader)
+        for row in reader:
+            if not row or not row[0]:
+                continue
+            key   = row[0]
+            steps = [int(x) for x in row[1:] if x.strip().isdigit()]
+            lwa_data[key] = [s for s in steps if s <= train_end_time]
+    return lwa_data
 
 
 def prepare_dataset(
@@ -147,21 +161,25 @@ def prepare_dataset(
     output_dir,
     config,
     blocking_days=None,
-    train_ratio=0.8,
-    valid_ratio=0.1,
-    test_ratio=0.1,
+    train_ratio=None,
+    valid_ratio=None,
+    test_ratio=None,
     random_seed=None,
 ):
+    if train_ratio is None or valid_ratio is None or test_ratio is None:
+        raise ValueError("train_ratio, valid_ratio, and test_ratio must all be specified.")
     if abs(train_ratio + valid_ratio + test_ratio - 1.0) > 1e-6:
         raise ValueError("Split ratios must sum to 1.0")
 
-    ds = xr.open_dataset(input_path)
-    T_orig = ds['q1q2'].shape[0]
-    original_train_end = int(T_orig * train_ratio)
-    original_valid_end = int(T_orig * (train_ratio + valid_ratio))
+    ds   = xr.open_dataset(input_path)
+    T    = ds['q1q2'].shape[0]
+
+    train_end_idx = int(T * train_ratio)
+    valid_end_idx = int(T * (train_ratio + valid_ratio))
+
     original_time_coords = ds['time'].values
 
-    datasets = {}
+    datasets     = {}
     removed_info = {}
 
     if ENABLE_BLOCKING_REMOVAL and blocking_days:
@@ -170,8 +188,9 @@ def prepare_dataset(
         removed_info['blocking'] = removed
 
     if ENABLE_RANDOM_SUBSAMPLE:
-        target = datasets['blocking']['q1q2'].shape[0] if 'blocking' in datasets else ds['q1q2'].shape[0]
-        ds_s, removed = _random_subsample(ds, target, config, original_train_end, random_seed)
+        base_ds = datasets.get('blocking', ds)
+        target  = base_ds['q1q2'].shape[0]
+        ds_s, removed = _random_subsample(ds, target, config, train_end_idx, random_seed)
         datasets['subsampled'] = ds_s
         removed_info['subsampled'] = removed
 
@@ -205,13 +224,13 @@ def prepare_dataset(
         time_coords = ds_cur['time'].values
 
         train_idx, valid_idx, test_idx = _compute_splits(
-            time_coords, original_time_coords, original_train_end, original_valid_end
+            time_coords, original_time_coords, train_end_idx, valid_end_idx
         )
 
         if ENABLE_NORMALIZATION:
             time_series, norm_mean, norm_std = _normalize(time_series, train_idx, config)
         else:
-            C, H, W = time_series.shape[1], time_series.shape[2], time_series.shape[3]
+            C, H, W   = time_series.shape[1], time_series.shape[2], time_series.shape[3]
             norm_mean = np.zeros((C, H, W), dtype=float)
             norm_std  = np.ones((C, H, W),  dtype=float)
 
@@ -219,16 +238,16 @@ def prepare_dataset(
 
         np.savez_compressed(
             out_path,
-            time_series=time_series,
-            time_coords=time_coords,
-            train_indices=train_idx,
-            valid_indices=valid_idx,
-            test_indices=test_idx,
-            normalization_mean=norm_mean,
-            normalization_std=norm_std,
-            original_mean=original_mean.values,
-            original_std=original_std.values,
-            removed_days=removed_info[dtype],
+            time_series         = time_series,
+            time_coords         = time_coords,
+            train_indices       = train_idx,
+            valid_indices       = valid_idx,
+            test_indices        = test_idx,
+            normalization_mean  = norm_mean,
+            normalization_std   = norm_std,
+            original_mean       = original_mean.values,
+            original_std        = original_std.values,
+            removed_days        = removed_info[dtype],
         )
 
         results[dtype] = {

@@ -1,5 +1,8 @@
+"""
+Entry point for training and evaluating the AFNO model.
+"""
+
 import os
-import sys
 import gc
 import numpy as np
 import torch
@@ -10,11 +13,12 @@ from models.losses  import RelativeLpLoss, FieldDenormalizer
 from training.trainer import (
     LRFinder, train, fine_tune, load_checkpoint, save_checkpoint
 )
-from evaluation.metrics    import evaluate_all_channels
-from evaluation.visualize  import (
+from evaluation.metrics   import evaluate_all_channels
+from evaluation.visualize import (
     visualize_prediction, visualize_autoregressive,
     hovmoller_rollout, plot_hovmoller_comparison
 )
+from data.prepare_dataset import prepare_dataset, load_lwa_thresholds
 
 
 torch.cuda.empty_cache()
@@ -34,11 +38,11 @@ cfg = {
     'embed_dim':        None,
     'depth':            None,
     'n_groups':         None,
-    'mlp_ratio':        4.0,
-    'dropout':          0.0,
-    'drop_path_rate':   0.1,
-    'shrink_threshold': 0.01,
-    'mode_fraction':    1.0,
+    'mlp_ratio':        None,
+    'dropout':          None,
+    'drop_path_rate':   None,
+    'shrink_threshold': None,
+    'mode_fraction':    None,
 
     'batch_size':       None,
     'epochs':           None,
@@ -65,19 +69,26 @@ cfg = {
 
     'time_gap':         None,
     'channel_names':    ['q1', 'q2'],
+
+    'train_ratio':      None,
+    'valid_ratio':      None,
+    'test_ratio':       None,
+    'lwa_csv_path':     None,
+    'lwa_threshold_key': None,
+    'random_seed':      None,
 }
 
 
 def load_data(cfg):
     data = np.load(cfg['data_path'], allow_pickle=True)
 
-    ts            = data['time_series']
-    time_coords   = data['time_coords']
-    train_idx     = data['train_indices']
-    valid_idx     = data['valid_indices']
-    test_idx      = data['test_indices']
-    norm_mean     = data['normalization_mean']
-    norm_std      = data['normalization_std']
+    ts          = data['time_series']
+    time_coords = data['time_coords']
+    train_idx   = data['train_indices']
+    valid_idx   = data['valid_indices']
+    test_idx    = data['test_indices']
+    norm_mean   = data['normalization_mean']
+    norm_std    = data['normalization_std']
 
     cfg['grid_size'] = (ts.shape[2], ts.shape[3])
 
@@ -97,21 +108,25 @@ def load_data(cfg):
         return torch.from_numpy(arr).float()
 
     tensors = {
-        'x_train': to_tensor(x_tr), 'y_train': to_tensor(y_tr),
-        'x_val':   to_tensor(x_va), 'y_val':   to_tensor(y_va),
-        'x_test':  to_tensor(x_te), 'y_test':  to_tensor(y_te),
+        'x_train':    to_tensor(x_tr), 'y_train': to_tensor(y_tr),
+        'x_val':      to_tensor(x_va), 'y_val':   to_tensor(y_va),
+        'x_test':     to_tensor(x_te), 'y_test':  to_tensor(y_te),
         'time_coords': time_coords,
-        'train_idx': train_idx, 'valid_idx': valid_idx, 'test_idx': test_idx,
+        'train_idx':  train_idx, 'valid_idx': valid_idx, 'test_idx': test_idx,
     }
     denorm = FieldDenormalizer(norm_mean, norm_std).cuda()
     return tensors, denorm
 
 
 def make_loaders(tensors, cfg):
-    bs  = cfg['batch_size']
+    bs = cfg['batch_size']
+
     def loader(x, y, shuffle):
-        return td.DataLoader(td.TensorDataset(x.to(device), y.to(device)),
-                             batch_size=bs, shuffle=shuffle)
+        return td.DataLoader(
+            td.TensorDataset(x.to(device), y.to(device)),
+            batch_size=bs, shuffle=shuffle,
+        )
+
     return (
         loader(tensors['x_train'], tensors['y_train'], True),
         loader(tensors['x_val'],   tensors['y_val'],   False),
@@ -120,12 +135,13 @@ def make_loaders(tensors, cfg):
 
 
 def make_triplet_loaders(tensors, time_coords, cfg):
-    """Build loaders for the fine-tuning stage (consecutive triplets)."""
     gap = cfg['time_gap']
 
     def consecutive_triplets(indices):
         times = time_coords[indices]
-        mask  = np.where((np.diff(times[:-1]) == gap) & (np.diff(times[1:]) == gap))[0]
+        mask  = np.where(
+            (np.diff(times[:-1]) == gap) & (np.diff(times[1:]) == gap)
+        )[0]
         if len(mask) == 0:
             empty = torch.empty(0, *tensors['x_train'].shape[1:])
             return empty, empty, empty
@@ -153,7 +169,7 @@ def make_triplet_loaders(tensors, time_coords, cfg):
 
 
 def build_model(cfg):
-    model = AFNONet(
+    return AFNONet(
         grid_size        = cfg['grid_size'],
         patch_size       = cfg['patch_size'],
         in_chans         = cfg['in_chans'],
@@ -167,7 +183,6 @@ def build_model(cfg):
         shrink_threshold = cfg['shrink_threshold'],
         mode_fraction    = cfg['mode_fraction'],
     ).to(device)
-    return model
 
 
 def build_scheduler(optimizer, cfg):
@@ -186,6 +201,13 @@ def build_scheduler(optimizer, cfg):
 
 
 if __name__ == '__main__':
+    if cfg['lwa_csv_path'] and cfg['lwa_threshold_key']:
+        train_end_time = None
+        lwa_thresholds = load_lwa_thresholds(cfg['lwa_csv_path'], train_end_time)
+        blocking_days  = lwa_thresholds.get(cfg['lwa_threshold_key'], [])
+    else:
+        blocking_days = None
+
     tensors, denorm = load_data(cfg)
     tr_loader, va_loader, te_loader = make_loaders(tensors, cfg)
 
@@ -194,23 +216,25 @@ if __name__ == '__main__':
 
     lr = cfg['learning_rate']
     if cfg['use_lr_finder']:
-        tmp_opt    = torch.optim.Adam(model.parameters(), lr=1e-7)
-        finder     = LRFinder(model, tmp_opt, criterion, device)
+        tmp_opt = torch.optim.Adam(model.parameters(), lr=1e-7)
+        finder  = LRFinder(model, tmp_opt, criterion, device)
         finder.range_test(tr_loader,
-                          start_lr=cfg['lr_find_start'],
-                          end_lr=cfg['lr_find_end'],
-                          n_iter=cfg['lr_find_iter'])
+                          start_lr = cfg['lr_find_start'],
+                          end_lr   = cfg['lr_find_end'],
+                          n_iter   = cfg['lr_find_iter'])
         finder.plot()
         lr = finder.suggest() or lr
 
-    optimizer = torch.optim.Adam(model.parameters(),
-                                 lr=max(lr, 1e-5),
-                                 weight_decay=cfg['weight_decay'])
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr           = max(lr, 1e-5),
+        weight_decay = cfg['weight_decay'],
+    )
     scheduler = build_scheduler(optimizer, cfg)
 
     start_epoch, skip = load_checkpoint(model, optimizer, cfg['save_dir'])
     if not skip:
-        train_losses, val_losses, test_errors = train(
+        train(
             model, optimizer, scheduler, criterion,
             tr_loader, va_loader, te_loader,
             cfg, cfg['save_dir'], device,
@@ -220,9 +244,11 @@ if __name__ == '__main__':
     if cfg['fine_tune']:
         ft_tr, ft_va, ft_te = make_triplet_loaders(
             tensors, tensors['time_coords'], cfg)
-        ft_optimizer = torch.optim.Adam(model.parameters(),
-                                        lr=cfg['learning_rate_ft'],
-                                        weight_decay=cfg['weight_decay'])
+        ft_optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr           = cfg['learning_rate_ft'],
+            weight_decay = cfg['weight_decay'],
+        )
         ft_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             ft_optimizer, T_max=cfg['t_max_ft'], eta_min=0)
         fine_tune(model, ft_optimizer, ft_scheduler, criterion,
@@ -236,8 +262,7 @@ if __name__ == '__main__':
     all_preds, all_true = [], []
     with torch.no_grad():
         for x, y in te_loader:
-            x, y = x.to(device), y.to(device)
-            all_preds.append(model(x).cpu())
+            all_preds.append(model(x.to(device)).cpu())
             all_true.append(y.cpu())
 
     all_preds = torch.cat(all_preds)
@@ -265,15 +290,12 @@ if __name__ == '__main__':
                                  time_gap=cfg['time_gap'])
 
     for idx in range(2):
-        x_init = x_te[idx:idx + 1]
-        preds  = hovmoller_rollout(model, x_init, denorm, steps=8, device=device)
-
+        x_init   = x_te[idx:idx + 1]
+        preds    = hovmoller_rollout(model, x_init, denorm, steps=8, device=device)
         denorm.cpu()
         true_hov = np.stack([
             denorm.decode(y_te[idx + t:idx + t + 1].cpu()).numpy()
             for t in range(8)
         ])
         denorm.cuda()
-
-        plot_hovmoller_comparison(preds, true_hov,
-                                  channel_names=cfg['channel_names'])
+        plot_hovmoller_comparison(preds, true_hov, channel_names=cfg['channel_names'])
